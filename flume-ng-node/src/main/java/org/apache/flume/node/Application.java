@@ -75,6 +75,7 @@ public class Application {
 
     public Application(List<LifecycleAware> components) {
         this.components = components;
+        //todo 监控服务
         supervisor = new LifecycleSupervisor();
     }
 
