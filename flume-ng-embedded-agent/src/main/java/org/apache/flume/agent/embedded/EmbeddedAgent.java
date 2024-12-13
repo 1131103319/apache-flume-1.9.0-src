@@ -18,18 +18,9 @@
  */
 package org.apache.flume.agent.embedded;
 
-import java.util.List;
-import java.util.Map;
-import java.util.TreeSet;
-
-import org.apache.flume.Channel;
-import org.apache.flume.ChannelException;
-import org.apache.flume.Event;
-import org.apache.flume.EventDeliveryException;
-import org.apache.flume.FlumeException;
-import org.apache.flume.SinkRunner;
-import org.apache.flume.Source;
-import org.apache.flume.SourceRunner;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Preconditions;
+import org.apache.flume.*;
 import org.apache.flume.annotations.InterfaceAudience;
 import org.apache.flume.annotations.InterfaceStability;
 import org.apache.flume.conf.LogPrivacyUtil;
@@ -41,8 +32,9 @@ import org.apache.flume.node.MaterializedConfiguration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Preconditions;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeSet;
 
 /**
  * EmbeddedAgent gives Flume users the ability to embed simple agents in
@@ -220,8 +212,11 @@ public class EmbeddedAgent {
   private void doStart() {
     boolean error = true;
     try {
+        //todo //调用Channel.start启动Channel
       channel.start();
+      //todo //调用SinkRunner.start启动SinkRunner
       sinkRunner.start();
+      //todo //调用SourceRunner.start启动SourceRunner
       sourceRunner.start();
 
       supervisor.supervise(channel,

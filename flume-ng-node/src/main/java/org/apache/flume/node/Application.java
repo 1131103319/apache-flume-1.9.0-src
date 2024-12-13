@@ -82,6 +82,8 @@ public class Application {
     public void start() {
         lifecycleLock.lock();
         try {
+            //todo //start方法会对每一个组件调用LifecycleSupervisor.supervise方法，参数为组件，
+            // AlwaysRestartPolicy和START状态（即期望的状态为START）
             for (LifecycleAware component : components) {
                 supervisor.supervise(component,
                         new SupervisorPolicy.AlwaysRestartPolicy(), LifecycleState.START);
@@ -349,13 +351,17 @@ public class Application {
                 List<LifecycleAware> components = Lists.newArrayList();
 
                 if (reload) {
+                    //todo //实例化一个EventBus对象
                     EventBus eventBus = new EventBus(agentName + "-event-bus");
                     //todo //初始化一个List<LifecycleAware>对象，用来存放需要启动的组件，这个只有在支持reload的情况才会使用
                     PollingPropertiesFileConfigurationProvider configurationProvider =
                             new PollingPropertiesFileConfigurationProvider(
+                                    //todo /默认的检测文件是否更新的interval时间为30s
                                     agentName, configurationFile, eventBus, 30);
+                    //todo //添加到启动列表中，在start方法中会启动PollingPropertiesFileConfigurationProvider 的计划任务线程池
                     components.add(configurationProvider);
                     application = new Application(components);
+                    //todo //向EventBus中注册Application对象，让Application对象作为时间的监听者
                     eventBus.register(application);
                 } else {
                     //todo //不知道reload的情况

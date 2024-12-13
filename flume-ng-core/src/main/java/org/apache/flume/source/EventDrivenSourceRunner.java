@@ -19,6 +19,7 @@
 
 package org.apache.flume.source;
 
+import org.apache.flume.EventDrivenSource;
 import org.apache.flume.Source;
 import org.apache.flume.SourceRunner;
 import org.apache.flume.channel.ChannelProcessor;
@@ -30,38 +31,42 @@ import org.apache.flume.lifecycle.LifecycleState;
  */
 public class EventDrivenSourceRunner extends SourceRunner {
 
-  private LifecycleState lifecycleState;
+    private LifecycleState lifecycleState;
 
-  public EventDrivenSourceRunner() {
-    lifecycleState = LifecycleState.IDLE;
-  }
+    public EventDrivenSourceRunner() {
+        lifecycleState = LifecycleState.IDLE;
+    }
 
-  @Override
-  public void start() {
-    Source source = getSource();
-    ChannelProcessor cp = source.getChannelProcessor();
-    cp.initialize();
-    source.start();
-    lifecycleState = LifecycleState.START;
-  }
+    @Override
+    public void start() {
+        //todo //通过getSource获取Source对象
+        Source source = getSource();
+        //todo //获取ChannelProcessor 对象
+        ChannelProcessor cp = source.getChannelProcessor();
+        //todo //调用ChannelProcessor.initialize方法
+        cp.initialize();
+        //todo //调用Source.start方法
+        source.start();
+        lifecycleState = LifecycleState.START;
+    }
 
-  @Override
-  public void stop() {
-    Source source = getSource();
-    source.stop();
-    ChannelProcessor cp = source.getChannelProcessor();
-    cp.close();
-    lifecycleState = LifecycleState.STOP;
-  }
+    @Override
+    public void stop() {
+        Source source = getSource();
+        source.stop();
+        ChannelProcessor cp = source.getChannelProcessor();
+        cp.close();
+        lifecycleState = LifecycleState.STOP;
+    }
 
-  @Override
-  public String toString() {
-    return "EventDrivenSourceRunner: { source:" + getSource() + " }";
-  }
+    @Override
+    public String toString() {
+        return "EventDrivenSourceRunner: { source:" + getSource() + " }";
+    }
 
-  @Override
-  public LifecycleState getLifecycleState() {
-    return lifecycleState;
-  }
+    @Override
+    public LifecycleState getLifecycleState() {
+        return lifecycleState;
+    }
 
 }

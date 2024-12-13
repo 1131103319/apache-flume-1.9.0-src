@@ -19,24 +19,9 @@
 
 package org.apache.flume.source;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
-
-import org.apache.flume.Channel;
-import org.apache.flume.Context;
-import org.apache.flume.Event;
-import org.apache.flume.EventDrivenSource;
-import org.apache.flume.Source;
-import org.apache.flume.SystemClock;
+import com.google.common.base.Preconditions;
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
+import org.apache.flume.*;
 import org.apache.flume.channel.ChannelProcessor;
 import org.apache.flume.conf.BatchSizeSupported;
 import org.apache.flume.conf.Configurable;
@@ -45,10 +30,13 @@ import org.apache.flume.instrumentation.SourceCounter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.google.common.base.Preconditions;
-import com.google.common.util.concurrent.ThreadFactoryBuilder;
-
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
 import java.nio.charset.Charset;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.*;
 
 /**
  * <p>
@@ -150,328 +138,344 @@ import java.nio.charset.Charset;
 public class ExecSource extends AbstractSource implements EventDrivenSource, Configurable,
         BatchSizeSupported {
 
-  private static final Logger logger = LoggerFactory.getLogger(ExecSource.class);
+    private static final Logger logger = LoggerFactory.getLogger(ExecSource.class);
 
-  private String shell;
-  private String command;
-  private SourceCounter sourceCounter;
-  private ExecutorService executor;
-  private Future<?> runnerFuture;
-  private long restartThrottle;
-  private boolean restart;
-  private boolean logStderr;
-  private Integer bufferCount;
-  private long batchTimeout;
-  private ExecRunnable runner;
-  private Charset charset;
-
-  @Override
-  public void start() {
-    logger.info("Exec source starting with command: {}", command);
-
-    // Start the counter before starting any threads that may access it.
-    sourceCounter.start();
-
-    executor = Executors.newSingleThreadExecutor();
-    runner = new ExecRunnable(shell, command, getChannelProcessor(), sourceCounter, restart,
-                              restartThrottle, logStderr, bufferCount, batchTimeout, charset);
-
-    // Start the runner thread.
-    runnerFuture = executor.submit(runner);
-
-    // Mark the Source as RUNNING.
-    super.start();
-
-    logger.debug("Exec source started");
-  }
-
-  @Override
-  public void stop() {
-    logger.info("Stopping exec source with command: {}", command);
-    if (runner != null) {
-      runner.setRestart(false);
-      runner.kill();
-    }
-
-    if (runnerFuture != null) {
-      logger.debug("Stopping exec runner");
-      runnerFuture.cancel(true);
-      logger.debug("Exec runner stopped");
-    }
-    executor.shutdown();
-
-    while (!executor.isTerminated()) {
-      logger.debug("Waiting for exec executor service to stop");
-      try {
-        executor.awaitTermination(500, TimeUnit.MILLISECONDS);
-      } catch (InterruptedException e) {
-        logger.debug("Interrupted while waiting for exec executor service "
-            + "to stop. Just exiting.");
-        Thread.currentThread().interrupt();
-      }
-    }
-
-    sourceCounter.stop();
-    super.stop();
-
-    logger.debug("Exec source with command:{} stopped. Metrics:{}", command,
-        sourceCounter);
-  }
-
-  @Override
-  public void configure(Context context) {
-    command = context.getString("command");
-
-    Preconditions.checkState(command != null,
-        "The parameter command must be specified");
-
-    restartThrottle = context.getLong(ExecSourceConfigurationConstants.CONFIG_RESTART_THROTTLE,
-        ExecSourceConfigurationConstants.DEFAULT_RESTART_THROTTLE);
-
-    restart = context.getBoolean(ExecSourceConfigurationConstants.CONFIG_RESTART,
-        ExecSourceConfigurationConstants.DEFAULT_RESTART);
-
-    logStderr = context.getBoolean(ExecSourceConfigurationConstants.CONFIG_LOG_STDERR,
-        ExecSourceConfigurationConstants.DEFAULT_LOG_STDERR);
-
-    bufferCount = context.getInteger(ExecSourceConfigurationConstants.CONFIG_BATCH_SIZE,
-        ExecSourceConfigurationConstants.DEFAULT_BATCH_SIZE);
-
-    batchTimeout = context.getLong(ExecSourceConfigurationConstants.CONFIG_BATCH_TIME_OUT,
-        ExecSourceConfigurationConstants.DEFAULT_BATCH_TIME_OUT);
-
-    charset = Charset.forName(context.getString(ExecSourceConfigurationConstants.CHARSET,
-        ExecSourceConfigurationConstants.DEFAULT_CHARSET));
-
-    shell = context.getString(ExecSourceConfigurationConstants.CONFIG_SHELL, null);
-
-    if (sourceCounter == null) {
-      sourceCounter = new SourceCounter(getName());
-    }
-  }
-
-  @Override
-  public long getBatchSize() {
-    return bufferCount;
-  }
-
-  private static class ExecRunnable implements Runnable {
-
-    public ExecRunnable(String shell, String command, ChannelProcessor channelProcessor,
-        SourceCounter sourceCounter, boolean restart, long restartThrottle,
-        boolean logStderr, int bufferCount, long batchTimeout, Charset charset) {
-      this.command = command;
-      this.channelProcessor = channelProcessor;
-      this.sourceCounter = sourceCounter;
-      this.restartThrottle = restartThrottle;
-      this.bufferCount = bufferCount;
-      this.batchTimeout = batchTimeout;
-      this.restart = restart;
-      this.logStderr = logStderr;
-      this.charset = charset;
-      this.shell = shell;
-    }
-
-    private final String shell;
-    private final String command;
-    private final ChannelProcessor channelProcessor;
-    private final SourceCounter sourceCounter;
-    private volatile boolean restart;
-    private final long restartThrottle;
-    private final int bufferCount;
-    private long batchTimeout;
-    private final boolean logStderr;
-    private final Charset charset;
-    private Process process = null;
-    private SystemClock systemClock = new SystemClock();
-    private Long lastPushToChannel = systemClock.currentTimeMillis();
-    ScheduledExecutorService timedFlushService;
-    ScheduledFuture<?> future;
-
-    @Override
-    public void run() {
-      do {
-        String exitCode = "unknown";
-        BufferedReader reader = null;
-        String line = null;
-        final List<Event> eventList = new ArrayList<Event>();
-
-        timedFlushService = Executors.newSingleThreadScheduledExecutor(
-                new ThreadFactoryBuilder().setNameFormat(
-                "timedFlushExecService" +
-                Thread.currentThread().getId() + "-%d").build());
-        try {
-          if (shell != null) {
-            String[] commandArgs = formulateShellCommand(shell, command);
-            process = Runtime.getRuntime().exec(commandArgs);
-          }  else {
-            String[] commandArgs = command.split("\\s+");
-            process = new ProcessBuilder(commandArgs).start();
-          }
-          reader = new BufferedReader(
-              new InputStreamReader(process.getInputStream(), charset));
-
-          // StderrLogger dies as soon as the input stream is invalid
-          StderrReader stderrReader = new StderrReader(new BufferedReader(
-              new InputStreamReader(process.getErrorStream(), charset)), logStderr);
-          stderrReader.setName("StderrReader-[" + command + "]");
-          stderrReader.setDaemon(true);
-          stderrReader.start();
-
-          future = timedFlushService.scheduleWithFixedDelay(new Runnable() {
-              @Override
-              public void run() {
-                try {
-                  synchronized (eventList) {
-                    if (!eventList.isEmpty() && timeout()) {
-                      flushEventBatch(eventList);
-                    }
-                  }
-                } catch (Exception e) {
-                  logger.error("Exception occurred when processing event batch", e);
-                  if (e instanceof InterruptedException) {
-                    Thread.currentThread().interrupt();
-                  }
-                }
-              }
-          },
-          batchTimeout, batchTimeout, TimeUnit.MILLISECONDS);
-
-          while ((line = reader.readLine()) != null) {
-            sourceCounter.incrementEventReceivedCount();
-            synchronized (eventList) {
-              eventList.add(EventBuilder.withBody(line.getBytes(charset)));
-              if (eventList.size() >= bufferCount || timeout()) {
-                flushEventBatch(eventList);
-              }
-            }
-          }
-
-          synchronized (eventList) {
-            if (!eventList.isEmpty()) {
-              flushEventBatch(eventList);
-            }
-          }
-        } catch (Exception e) {
-          logger.error("Failed while running command: " + command, e);
-          if (e instanceof InterruptedException) {
-            Thread.currentThread().interrupt();
-          }
-        } finally {
-          if (reader != null) {
-            try {
-              reader.close();
-            } catch (IOException ex) {
-              logger.error("Failed to close reader for exec source", ex);
-            }
-          }
-          exitCode = String.valueOf(kill());
-        }
-        if (restart) {
-          logger.info("Restarting in {}ms, exit code {}", restartThrottle,
-              exitCode);
-          try {
-            Thread.sleep(restartThrottle);
-          } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-          }
-        } else {
-          logger.info("Command [" + command + "] exited with " + exitCode);
-        }
-      } while (restart);
-    }
-
-    private void flushEventBatch(List<Event> eventList) {
-      channelProcessor.processEventBatch(eventList);
-      sourceCounter.addToEventAcceptedCount(eventList.size());
-      eventList.clear();
-      lastPushToChannel = systemClock.currentTimeMillis();
-    }
-
-    private boolean timeout() {
-      return (systemClock.currentTimeMillis() - lastPushToChannel) >= batchTimeout;
-    }
-
-    private static String[] formulateShellCommand(String shell, String command) {
-      String[] shellArgs = shell.split("\\s+");
-      String[] result = new String[shellArgs.length + 1];
-      System.arraycopy(shellArgs, 0, result, 0, shellArgs.length);
-      result[shellArgs.length] = command;
-      return result;
-    }
-
-    public int kill() {
-      if (process != null) {
-        synchronized (process) {
-          process.destroy();
-
-          try {
-            int exitValue = process.waitFor();
-
-            // Stop the Thread that flushes periodically
-            if (future != null) {
-              future.cancel(true);
-            }
-
-            if (timedFlushService != null) {
-              timedFlushService.shutdown();
-              while (!timedFlushService.isTerminated()) {
-                try {
-                  timedFlushService.awaitTermination(500, TimeUnit.MILLISECONDS);
-                } catch (InterruptedException e) {
-                  logger.debug("Interrupted while waiting for exec executor service "
-                      + "to stop. Just exiting.");
-                  Thread.currentThread().interrupt();
-                }
-              }
-            }
-            return exitValue;
-          } catch (InterruptedException ex) {
-            Thread.currentThread().interrupt();
-          }
-        }
-        return Integer.MIN_VALUE;
-      }
-      return Integer.MIN_VALUE / 2;
-    }
-    public void setRestart(boolean restart) {
-      this.restart = restart;
-    }
-  }
-
-  private static class StderrReader extends Thread {
-    private BufferedReader input;
+    private String shell;
+    //todo command  执行的命令
+    private String command;
+    private SourceCounter sourceCounter;
+    private ExecutorService executor;
+    private Future<?> runnerFuture;
+    //todo restartThrottle 重启命令的等待时间，默认是10s
+    private long restartThrottle;
+    //todo restart 在命令退出后是否自动重启，默认是false
+    private boolean restart;
+    //todo logStderr 是否记录错误日志（只会放到日志中，不会做为Event）,默认是false
     private boolean logStderr;
+    //todo batchSize 一次向channel发送的event的数量，批量发送的功能，默认是20
+    private Integer bufferCount;
+    private long batchTimeout;
+    private ExecRunnable runner;
+    //todo charset 字符编码设置，默认是UTF-8
+    private Charset charset;
 
-    protected StderrReader(BufferedReader input, boolean logStderr) {
-      this.input = input;
-      this.logStderr = logStderr;
+    @Override
+    public void start() {
+        logger.info("Exec source starting with command: {}", command);
+
+        // Start the counter before starting any threads that may access it.
+        sourceCounter.start();
+        //todo // 初始化一个单线程的线程池,private ExecutorService executor;
+        executor = Executors.newSingleThreadExecutor();
+        //todo //实例化一个ExecRunnable线程
+        runner = new ExecRunnable(shell, command, getChannelProcessor(), sourceCounter, restart,
+                restartThrottle, logStderr, bufferCount, batchTimeout, charset);
+
+        // Start the runner thread.
+        runnerFuture = executor.submit(runner);
+
+        // Mark the Source as RUNNING.
+        //todo //设置状态为start,lifecycleState = LifecycleState.START;
+        super.start();
+
+        logger.debug("Exec source started");
     }
 
     @Override
-    public void run() {
-      try {
-        int i = 0;
-        String line = null;
-        while ((line = input.readLine()) != null) {
-          if (logStderr) {
-            // There is no need to read 'line' with a charset
-            // as we do not to propagate it.
-            // It is in UTF-16 and would be printed in UTF-8 format.
-            logger.info("StderrLogger[{}] = '{}'", ++i, line);
-          }
+    public void stop() {
+        logger.info("Stopping exec source with command: {}", command);
+        if (runner != null) {
+            runner.setRestart(false);
+            runner.kill();
         }
-      } catch (IOException e) {
-        logger.info("StderrLogger exiting", e);
-      } finally {
-        try {
-          if (input != null) {
-            input.close();
-          }
-        } catch (IOException ex) {
-          logger.error("Failed to close stderr reader for exec source", ex);
+
+        if (runnerFuture != null) {
+            logger.debug("Stopping exec runner");
+            runnerFuture.cancel(true);
+            logger.debug("Exec runner stopped");
         }
-      }
+        executor.shutdown();
+
+        while (!executor.isTerminated()) {
+            logger.debug("Waiting for exec executor service to stop");
+            try {
+                executor.awaitTermination(500, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                logger.debug("Interrupted while waiting for exec executor service "
+                        + "to stop. Just exiting.");
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        sourceCounter.stop();
+        super.stop();
+
+        logger.debug("Exec source with command:{} stopped. Metrics:{}", command,
+                sourceCounter);
     }
-  }
+
+    @Override
+    public void configure(Context context) {
+        command = context.getString("command");
+
+        Preconditions.checkState(command != null,
+                "The parameter command must be specified");
+
+        restartThrottle = context.getLong(ExecSourceConfigurationConstants.CONFIG_RESTART_THROTTLE,
+                ExecSourceConfigurationConstants.DEFAULT_RESTART_THROTTLE);
+
+        restart = context.getBoolean(ExecSourceConfigurationConstants.CONFIG_RESTART,
+                ExecSourceConfigurationConstants.DEFAULT_RESTART);
+
+        logStderr = context.getBoolean(ExecSourceConfigurationConstants.CONFIG_LOG_STDERR,
+                ExecSourceConfigurationConstants.DEFAULT_LOG_STDERR);
+
+        bufferCount = context.getInteger(ExecSourceConfigurationConstants.CONFIG_BATCH_SIZE,
+                ExecSourceConfigurationConstants.DEFAULT_BATCH_SIZE);
+
+        batchTimeout = context.getLong(ExecSourceConfigurationConstants.CONFIG_BATCH_TIME_OUT,
+                ExecSourceConfigurationConstants.DEFAULT_BATCH_TIME_OUT);
+
+        charset = Charset.forName(context.getString(ExecSourceConfigurationConstants.CHARSET,
+                ExecSourceConfigurationConstants.DEFAULT_CHARSET));
+
+        shell = context.getString(ExecSourceConfigurationConstants.CONFIG_SHELL, null);
+
+        if (sourceCounter == null) {
+            sourceCounter = new SourceCounter(getName());
+        }
+    }
+
+    @Override
+    public long getBatchSize() {
+        return bufferCount;
+    }
+
+    private static class ExecRunnable implements Runnable {
+
+        public ExecRunnable(String shell, String command, ChannelProcessor channelProcessor,
+                            SourceCounter sourceCounter, boolean restart, long restartThrottle,
+                            boolean logStderr, int bufferCount, long batchTimeout, Charset charset) {
+            this.command = command;
+            this.channelProcessor = channelProcessor;
+            this.sourceCounter = sourceCounter;
+            this.restartThrottle = restartThrottle;
+            this.bufferCount = bufferCount;
+            this.batchTimeout = batchTimeout;
+            this.restart = restart;
+            this.logStderr = logStderr;
+            this.charset = charset;
+            this.shell = shell;
+        }
+
+        private final String shell;
+        private final String command;
+        private final ChannelProcessor channelProcessor;
+        private final SourceCounter sourceCounter;
+        private volatile boolean restart;
+        private final long restartThrottle;
+        private final int bufferCount;
+        private long batchTimeout;
+        private final boolean logStderr;
+        private final Charset charset;
+        private Process process = null;
+        private SystemClock systemClock = new SystemClock();
+        private Long lastPushToChannel = systemClock.currentTimeMillis();
+        ScheduledExecutorService timedFlushService;
+        ScheduledFuture<?> future;
+
+        @Override
+        public void run() {
+            do {
+                String exitCode = "unknown";
+                BufferedReader reader = null;
+                String line = null;
+                final List<Event> eventList = new ArrayList<Event>();
+
+                timedFlushService = Executors.newSingleThreadScheduledExecutor(
+                        new ThreadFactoryBuilder().setNameFormat(
+                                "timedFlushExecService" +
+                                        Thread.currentThread().getId() + "-%d").build());
+                try {
+                    if (shell != null) {
+                        String[] commandArgs = formulateShellCommand(shell, command);
+                        process = Runtime.getRuntime().exec(commandArgs);
+                    } else {
+                        //todo //由命令生成字符串数组
+                        String[] commandArgs = command.split("\\s+");
+                        //todo //生成一个Process对象，启动命令进程
+                        process = new ProcessBuilder(commandArgs).start();
+                    }
+                    //todo //读取标准输出至缓冲区对象
+                    reader = new BufferedReader(
+                            new InputStreamReader(process.getInputStream(), charset));
+
+                    // StderrLogger dies as soon as the input stream is invalid
+                    //todo //StderrReader线程用于记录标准错误日志
+                    StderrReader stderrReader = new StderrReader(new BufferedReader(
+                            new InputStreamReader(process.getErrorStream(), charset)), logStderr);
+                    stderrReader.setName("StderrReader-[" + command + "]");
+                    stderrReader.setDaemon(true);
+                    stderrReader.start();
+
+                    future = timedFlushService.scheduleWithFixedDelay(new Runnable() {
+                                                                          @Override
+                                                                          public void run() {
+                                                                              try {
+                                                                                  synchronized (eventList) {
+                                                                                      if (!eventList.isEmpty() && timeout()) {
+                                                                                          flushEventBatch(eventList);
+                                                                                      }
+                                                                                  }
+                                                                              } catch (Exception e) {
+                                                                                  logger.error("Exception occurred when processing event batch", e);
+                                                                                  if (e instanceof InterruptedException) {
+                                                                                      Thread.currentThread().interrupt();
+                                                                                  }
+                                                                              }
+                                                                          }
+                                                                      },
+                            batchTimeout, batchTimeout, TimeUnit.MILLISECONDS);
+                    //todo //循环读取缓冲区中的内容
+                    while ((line = reader.readLine()) != null) {
+                        sourceCounter.incrementEventReceivedCount();
+                        synchronized (eventList) {
+                            //todo //使用EventBuilder.withBody转换成Event并放入eventList中
+                            eventList.add(EventBuilder.withBody(line.getBytes(charset)));
+                            //todo //达到batchSize的设置时调用ChannelProcessor.processEventBatch处理Event
+                            if (eventList.size() >= bufferCount || timeout()) {
+                                flushEventBatch(eventList);
+                            }
+                        }
+                    }
+
+                    synchronized (eventList) {
+                        if (!eventList.isEmpty()) {
+                            flushEventBatch(eventList);
+                        }
+                    }
+                } catch (Exception e) {
+                    logger.error("Failed while running command: " + command, e);
+                    if (e instanceof InterruptedException) {
+                        Thread.currentThread().interrupt();
+                    }
+                } finally {
+                    if (reader != null) {
+                        try {
+                            reader.close();
+                        } catch (IOException ex) {
+                            logger.error("Failed to close reader for exec source", ex);
+                        }
+                    }
+                    exitCode = String.valueOf(kill());
+                }
+                if (restart) {
+                    logger.info("Restarting in {}ms, exit code {}", restartThrottle,
+                            exitCode);
+                    try {
+                        Thread.sleep(restartThrottle);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                } else {
+                    logger.info("Command [" + command + "] exited with " + exitCode);
+                }
+                //todo //如果设置了restart，会在process退出后重新运行do代码块，否则退出
+            } while (restart);
+        }
+
+        private void flushEventBatch(List<Event> eventList) {
+            channelProcessor.processEventBatch(eventList);
+            sourceCounter.addToEventAcceptedCount(eventList.size());
+            eventList.clear();
+            lastPushToChannel = systemClock.currentTimeMillis();
+        }
+
+        private boolean timeout() {
+            return (systemClock.currentTimeMillis() - lastPushToChannel) >= batchTimeout;
+        }
+
+        private static String[] formulateShellCommand(String shell, String command) {
+            String[] shellArgs = shell.split("\\s+");
+            String[] result = new String[shellArgs.length + 1];
+            System.arraycopy(shellArgs, 0, result, 0, shellArgs.length);
+            result[shellArgs.length] = command;
+            return result;
+        }
+
+        public int kill() {
+            if (process != null) {
+                synchronized (process) {
+                    process.destroy();
+
+                    try {
+                        int exitValue = process.waitFor();
+
+                        // Stop the Thread that flushes periodically
+                        if (future != null) {
+                            future.cancel(true);
+                        }
+
+                        if (timedFlushService != null) {
+                            timedFlushService.shutdown();
+                            while (!timedFlushService.isTerminated()) {
+                                try {
+                                    timedFlushService.awaitTermination(500, TimeUnit.MILLISECONDS);
+                                } catch (InterruptedException e) {
+                                    logger.debug("Interrupted while waiting for exec executor service "
+                                            + "to stop. Just exiting.");
+                                    Thread.currentThread().interrupt();
+                                }
+                            }
+                        }
+                        return exitValue;
+                    } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+                return Integer.MIN_VALUE;
+            }
+            return Integer.MIN_VALUE / 2;
+        }
+
+        public void setRestart(boolean restart) {
+            this.restart = restart;
+        }
+    }
+
+    private static class StderrReader extends Thread {
+        private BufferedReader input;
+        private boolean logStderr;
+
+        protected StderrReader(BufferedReader input, boolean logStderr) {
+            this.input = input;
+            this.logStderr = logStderr;
+        }
+
+        @Override
+        public void run() {
+            try {
+                int i = 0;
+                String line = null;
+                while ((line = input.readLine()) != null) {
+                    if (logStderr) {
+                        // There is no need to read 'line' with a charset
+                        // as we do not to propagate it.
+                        // It is in UTF-16 and would be printed in UTF-8 format.
+                        logger.info("StderrLogger[{}] = '{}'", ++i, line);
+                    }
+                }
+            } catch (IOException e) {
+                logger.info("StderrLogger exiting", e);
+            } finally {
+                try {
+                    if (input != null) {
+                        input.close();
+                    }
+                } catch (IOException ex) {
+                    logger.error("Failed to close stderr reader for exec source", ex);
+                }
+            }
+        }
+    }
 }
