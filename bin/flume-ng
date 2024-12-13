@@ -197,7 +197,7 @@ in the classpath.
 
 EOF
 }
-
+##shell脚本实现
 run_flume() {
   local FLUME_APPLICATION_CLASS
 
@@ -429,6 +429,7 @@ if [ -n "${opt_dryrun}" ]; then
 fi
 
 # finally, invoke the appropriate command
+##如果第一个参数为agent时，opt_agent取值为1
 if [ -n "$opt_agent" ] ; then
   run_flume $FLUME_AGENT_CLASS $args
 elif [ -n "$opt_avro_client" ] ; then
