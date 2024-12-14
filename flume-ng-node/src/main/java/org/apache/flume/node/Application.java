@@ -288,6 +288,7 @@ public class Application {
             options.addOption(option);
 
             CommandLineParser parser = new GnuParser();
+            //todo
             CommandLine commandLine = parser.parse(options, args);
 
             if (commandLine.hasOption('h')) {
@@ -327,6 +328,7 @@ public class Application {
                     application.handleConfigurationEvent(zookeeperConfigurationProvider.getConfiguration());
                 }
             } else {
+                //todo 读取配置文件
                 File configurationFile = new File(commandLine.getOptionValue('f'));
 
                 /*
@@ -348,20 +350,21 @@ public class Application {
                                 "The specified configuration file does not exist: " + path);
                     }
                 }
+                //todo //初始化一个List<LifecycleAware>对象，用来存放需要启动的组件，这个只有在支持reload的情况才会使用
                 List<LifecycleAware> components = Lists.newArrayList();
 
                 if (reload) {
                     //todo //实例化一个EventBus对象
                     EventBus eventBus = new EventBus(agentName + "-event-bus");
-                    //todo //初始化一个List<LifecycleAware>对象，用来存放需要启动的组件，这个只有在支持reload的情况才会使用
                     PollingPropertiesFileConfigurationProvider configurationProvider =
+                            //todo 看着就是监控这个配置文件修改的
                             new PollingPropertiesFileConfigurationProvider(
                                     //todo /默认的检测文件是否更新的interval时间为30s
                                     agentName, configurationFile, eventBus, 30);
                     //todo //添加到启动列表中，在start方法中会启动PollingPropertiesFileConfigurationProvider 的计划任务线程池
                     components.add(configurationProvider);
                     application = new Application(components);
-                    //todo //向EventBus中注册Application对象，让Application对象作为时间的监听者
+                    //todo //向EventBus中注册Application对象，让Application对象作为事件的监听者
                     eventBus.register(application);
                 } else {
                     //todo //不知道reload的情况

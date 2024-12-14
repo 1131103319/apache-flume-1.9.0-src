@@ -91,7 +91,7 @@ public class LoggerSink extends AbstractSink implements Configurable {
       event = channel.take();
 
       if (event != null) {
-        if (logger.isInfoEnabled()) {
+          if (logger.isInfoEnabled()) {
           logger.info("Event: " + EventHelper.dumpEvent(event, maxBytesToLog));
         }
       } else {

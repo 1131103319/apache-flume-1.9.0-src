@@ -17,41 +17,18 @@
  */
 package org.apache.flume.node;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Enumeration;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Map.Entry;
-import java.util.Properties;
-import java.util.Set;
-
-import org.apache.flume.Channel;
-import org.apache.flume.ChannelFactory;
-import org.apache.flume.ChannelSelector;
-import org.apache.flume.Context;
-import org.apache.flume.FlumeException;
-import org.apache.flume.Sink;
-import org.apache.flume.SinkFactory;
-import org.apache.flume.SinkProcessor;
-import org.apache.flume.SinkRunner;
-import org.apache.flume.Source;
-import org.apache.flume.SourceFactory;
-import org.apache.flume.SourceRunner;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.ArrayListMultimap;
+import com.google.common.collect.ListMultimap;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import org.apache.flume.*;
 import org.apache.flume.annotations.Disposable;
 import org.apache.flume.channel.ChannelProcessor;
 import org.apache.flume.channel.ChannelSelectorFactory;
 import org.apache.flume.channel.DefaultChannelFactory;
-import org.apache.flume.conf.BasicConfigurationConstants;
-import org.apache.flume.conf.BatchSizeSupported;
-import org.apache.flume.conf.ComponentConfiguration;
-import org.apache.flume.conf.Configurables;
-import org.apache.flume.conf.FlumeConfiguration;
+import org.apache.flume.conf.*;
 import org.apache.flume.conf.FlumeConfiguration.AgentConfiguration;
-import org.apache.flume.conf.TransactionCapacitySupported;
 import org.apache.flume.conf.channel.ChannelSelectorConfiguration;
 import org.apache.flume.conf.sink.SinkConfiguration;
 import org.apache.flume.conf.sink.SinkGroupConfiguration;
@@ -63,11 +40,8 @@ import org.apache.flume.source.DefaultSourceFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.google.common.base.Preconditions;
-import com.google.common.collect.ArrayListMultimap;
-import com.google.common.collect.ListMultimap;
-import com.google.common.collect.Lists;
-import com.google.common.collect.Maps;
+import java.util.*;
+import java.util.Map.Entry;
 
 public abstract class AbstractConfigurationProvider implements ConfigurationProvider {
 
@@ -94,6 +68,7 @@ public abstract class AbstractConfigurationProvider implements ConfigurationProv
 
   public MaterializedConfiguration getConfiguration() {
     MaterializedConfiguration conf = new SimpleMaterializedConfiguration();
+    //todo 加载配置
     FlumeConfiguration fconfig = getFlumeConfiguration();
     AgentConfiguration agentConf = fconfig.getConfigurationFor(getAgentName());
     if (agentConf != null) {

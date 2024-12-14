@@ -50,7 +50,9 @@ public class PollingPropertiesFileConfigurationProvider
                                                       File file, EventBus eventBus, int interval) {
         super(agentName, file);
         this.eventBus = eventBus;
+        //todo 配置文件
         this.file = file;
+
         this.interval = interval;
         counterGroup = new CounterGroup();
         lifecycleState = LifecycleState.IDLE;

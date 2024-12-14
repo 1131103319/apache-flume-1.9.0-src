@@ -22,8 +22,8 @@
  export JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-1.8.jdk/Contents/Home
 
 # Give Flume more memory and pre-allocate, enable remote monitoring via JMX
-# export JAVA_OPTS="-Xms100m -Xmx2000m -Dcom.sun.management.jmxremote"
-
+ #export JAVA_OPTS="-Xms100m -Xmx2000m -Dcom.sun.management.jmxremote"
+export JAVA_OPTS="-Dflume.root.logger=DEBUG,console -Dorg.apache.flume.log.printconfig=true -Dorg.apache.flume.log.rawdata=true"
 # Let Flume write raw event data and configuration information to its log files for debugging
 # purposes. Enabling these flags is not recommended in production,
 # as it may result in logging sensitive user information or encryption secrets.
